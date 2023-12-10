@@ -1,0 +1,60 @@
+# Broadcast Hash Join, Increase Size, Downsides
+
+Spark will choose `BroadcastHashJoin` algorithm when one DataFrame is less than *`autoBroadcastJoinThreshold`*,which is 10MB as a default.
+
+Data will be broadcasted on each executor which results in **No Shuffle** at all.
+
+**ADVANTAGE**
+
+No Shuffle at all.
+
+******************************************COMMAND FOR BROADCAST******************************************
+
+`Large_DF.join(broadcast(Small_DF),”Broadcasting_Key”)`
+
+**HOW TO INCREASE BROADCAST JOIN THRESHOLD?**
+
+`spark.conf.set(“spark.sql.**autoBroadcastJoinThreshold**”, 100 * 1024 * 1024)`
+
+100 MB = 100 * 1024 * 1024
+
+**DOWNSIDES OF INCREASING THE BROADCASTING SIZE**
+
+Broadcasting a big size than the resources of the cluster, can lead to **OOM Error** or a **Broadcast timeout**.
+
+Default value for Broadcasting is 5 minutes.
+
+**HOW TO INCREASE THE BROADCASTING TIMEOUT?**
+
+`spark.conf.set(“spark.sql.broadcastTimeout”, time_in_sec)`
+
+**REASONS FOR BROADCAST TIMEOUT**
+
+1. Large Data size
+2. Broadcasting take too long due to UDF, Aggregations.
+
+**TIMEOUT SCENARIO:**
+
+In below code, Small_DF_Modified is a result of some expensive transformations >> user-defined function (UDF) >> data aggregations which take long to compute and will timeout.
+
+```sql
+Large_DF = spark.table(…)
+Small_DF = spark.read.csv(…)
+Small_DF_Modified = (Small_DF.withColumn(“x”, udf_call()).groupBy(“id”).sum(“x”))
+Large_DF.join(Small_DF_Modified.hint(“broadcast”), “id”)
+```
+
+<aside>
+💡 UDF (or any other transformation before the actual aggregation) takes to long to compute so the query will fail due to the broadcast timeout.
+
+</aside>
+
+**SOLUTION**
+
+`cache()` the small DataFrame before broadcasting.
+
+Query will be executed in three jobs.
+
+1. The first job will be triggered by the count action and it will compute the aggregation and store the result in memory (in the caching layer). 
+2. The second job will be responsible for broadcasting this result to each executor and this time it will not fail on the timeout because the data will be already computed and taken from the memory so it will run fast. 
+3. Finally, the last job will do the actual join.
